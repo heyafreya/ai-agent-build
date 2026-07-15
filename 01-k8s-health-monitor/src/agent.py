@@ -12,6 +12,7 @@ import re
 
 from shared.llm import chat
 
+from .alerts import score_pod, severity_counts
 from .k8s_client import describe_pod, get_logs, get_pods
 
 SYSTEM_PROMPT = """You are a Kubernetes cluster health monitoring assistant.
@@ -174,3 +175,30 @@ def analyze(namespace: str | None = None) -> str:
         tool_result = tool_output
 
     return "Agent reached maximum iterations. Here's what was found:\n\n" + "\n\n".join(conversation)
+
+
+def analyze_with_alerts(namespace: str | None = None) -> str:
+    """Run the agent's ReAct loop and append a deterministic alert severity summary."""
+
+    pods = get_pods(namespace)
+    llm_result = analyze(namespace)
+    counts = severity_counts(pods)
+    order = ["critical", "warning", "healthy"]
+    severity_parts = []
+    for s in order:
+        n = counts[s]
+        if n > 0:
+            label = f"{n} {s}"
+            if s != "healthy" and n > 1:
+                label += "s"
+            severity_parts.append(label)
+    severity_str = ", ".join(severity_parts) if severity_parts else "No pods"
+    block = f"\n\n--- Alert Thresholds ---\nSeverity: {severity_str}\n\n"
+    for s in order:
+        pds = [p for p in pods if score_pod(p) == s]
+        if pds:
+            block += f"{s.upper()}:\n"
+            for p in pds:
+                block += f"- {p.name} ({p.namespace}): {p.status} - restarts: {p.restarts}, ready: {p.ready}\n"
+            block += "\n"
+    return llm_result + block
