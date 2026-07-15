@@ -1,14 +1,24 @@
-.PHONY: install run clean
+.PHONY: install run lint fmt clean
 
 install:
-	python3 -m venv .venv
-	.venv/bin/pip install --upgrade pip
-	.venv/bin/pip install -r requirements.txt
+	@command -v uv >/dev/null 2>&1 || { echo "uv not found. First install? Run: curl -LsSf https://astral.sh/uv/install.sh | sh && source ~/.zshrc"; exit 1; }
+	uv venv
+	uv sync
+	uv pip install pre-commit
+	uv run pre-commit install
+	uv run pre-commit install --hook-type commit-msg
 	@echo ""
-	@echo "Setup complete. Run:  source .venv/bin/activate"
+	@echo "Setup complete. Run:  make run"
 
 run:
-	.venv/bin/python -m 01-k8s-health-monitor.src.cli
+	uv run python -m 01-k8s-health-monitor.src.cli
+
+lint:
+	uv run ruff check .
+
+fmt:
+	uv run ruff format .
+	uv run ruff check --fix .
 
 clean:
 	rm -rf .venv
