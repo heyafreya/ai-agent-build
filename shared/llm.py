@@ -5,7 +5,6 @@ Swap providers by changing env vars — no code changes needed.
 """
 
 import os
-from typing import Optional
 
 import litellm
 from dotenv import load_dotenv
@@ -30,7 +29,7 @@ def _resolve_model() -> str:
 def chat(
     system_prompt: str,
     user_prompt: str,
-    model: Optional[str] = None,
+    model: str | None = None,
     temperature: float = 0.3,
     max_tokens: int = 1024,
 ) -> str:

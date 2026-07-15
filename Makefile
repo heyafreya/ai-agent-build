@@ -14,11 +14,11 @@ run:
 	uv run python -m 01-k8s-health-monitor.src.cli
 
 lint:
-	uv run ruff check .
+	uv run pre-commit run ruff --all-files
 
 fmt:
-	uv run ruff format .
-	uv run ruff check --fix .
+	uv run pre-commit run ruff-format --all-files
+	uv run pre-commit run ruff --all-files
 
 clean:
 	rm -rf .venv
