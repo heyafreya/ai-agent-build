@@ -7,6 +7,7 @@ An AI agent that monitors a Kubernetes cluster and summarizes pod health in plai
 - [How This Project Was Built](#how-this-project-was-built)
 - [Learning Journal: Agent Design Foundations](#learning-journal-agent-design-foundations)
 - [Learning Journal: Concepts Learned](#learning-journal-concepts-learned)
+- [Web UI: Session Learnings & Challenges](#web-ui-session-learnings--challenges)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
 - [Project Structure](#project-structure)
@@ -211,6 +212,71 @@ Key pod statuses an agent needs to understand:
 
 ---
 
+## Web UI: Session Learnings & Challenges
+
+### What Was Built
+
+Transformed the CLI agent into a local web interface with three tabs: **Projects** (summary), **Live Demo** (interactive analysis), and **Model Comparison** (future). The Live Demo tab runs the ReAct agent against mock K8s clusters with a pod dropdown, severity charts, namespace breakdown, and an LLM-generated analysis rendered as markdown.
+
+### Key Fixes & Discoveries
+
+**1. Composite Caching Bug — Root Cause of LLM Hallucinations**
+
+The LLM kept inventing pod names like `frontend-abc123` and `payment-service`. The root cause: `_build_composite_scenario()` uses `random.sample()` to randomly select pods from the pool. Each call to `get_pods()` generated a different set, so the agent would describe pods in one call that didn't exist in the next.
+
+Fix: Added `_composite_cache` dict in `k8s_client.py` — the first call stores the result, subsequent calls return the cached set. Cache is cleared on `set_scenario()`.
+
+**2. LLM Hallucination — Missing Pod Context**
+
+Even after fixing the cache, the LLM sometimes described pods that weren't in the scenario. Fix: Added `EXISTING PODS` list directly in the system prompt so the LLM can only reference real pods.
+
+**3. Health Score "Degraded" on Healthy Clusters**
+
+The LLM would sometimes score a fully healthy cluster as "Degraded." Fix: Added explicit scoring rules to the prompt — e.g., "if ALL pods Running with restarts < 3 and full ready ratios → MUST be Healthy."
+
+**4. Pod Focus Skipping GET\_PODS**
+
+When a user selects a single pod, the agent was still listing all pods first, exposing unhealthy ones that the LLM would then investigate. Fix: When `focus_pod` is set, the agent skips `GET_PODS` entirely and goes straight to `DESCRIBE_POD` on the focused pod.
+
+**5. Charts Showing All Pods in Focus Mode**
+
+Severity chart and namespace breakdown always showed all 6 pods even when one was focused. Fix: Client-side filtering — when a pod is selected, `healthData.pods` is filtered to only that pod before rendering charts.
+
+**6. Missing Mock Data for Healthy Pods**
+
+`describe_pod()` only had mock data for the 5 bad pods. Healthy pods returned a generic empty message, so the LLM invented CrashLoopBackOff. Fix: Added detailed mock `kubectl describe` output for all 6 healthy pods (web-frontend, api-gateway, user-service-db, auth-service, nginx-deploy, cron-job-scheduler).
+
+**7. Markdown Regex Couldn't Handle LLM Output**
+
+The LLM outputs full markdown (`##`, `###`, `- **bold**:`), but chained regex replacements couldn't parse it. Fix: Replaced the regex pipeline with `marked.js` via CDN.
+
+**8. Pod Table Text Color Inheritance**
+
+Table cells inherited `color: var(--text-secondary)` from `#output`, making them grey. Fix: Explicit `color: var(--text)` on `.pod-table td`.
+
+**9. JS Regex Order Bug**
+
+`##` was replaced before `###`, so `### Issues Found` became `##Issues Found` (wrong). Fix: Reverse the order — `###` first, then `##`.
+
+### Architecture Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| `marked.js` over regex chains | LLM outputs complex markdown — regex can't reliably parse nested headings, bold, lists |
+| Charts in analysis output (not separate card) | User wanted a single analysis block — removing the Health Summary card |
+| `max_iterations` 6 → 8 | Agent needs more steps in composite scenarios with multiple unhealthy pods |
+| Composite cache | `random.sample()` is non-deterministic — caching ensures consistency across endpoints |
+
+### What I Learned
+
+- **LLMs are pattern matchers, not truth-tellers.** Without explicit pod lists and scoring rules, the model invents plausible-sounding but fabricated data.
+- **Caching is critical when data is randomly generated.** A single `random.sample()` call per request is fine; multiple calls with no shared state causes drift.
+- **Focus mode requires filtering at every layer.** Selecting a pod isn't just about the API call — charts, tables, and LLM context all need to respect the focus.
+- **Mock data completeness matters.** If you only mock failure cases, the LLM will assume everything is failing.
+- **Client-side state management is easy to overlook.** The `/health` endpoint returns all pods regardless of focus — the client must filter before rendering.
+
+---
+
 ## Quick Start
 
 ```bash
@@ -265,10 +331,18 @@ k8s-health --namespace default --describe
 01-k8s-health-monitor/
 ├── src/
 │   ├── __init__.py
-│   ├── cli.py         # CLI entry point (typer)
-│   ├── agent.py       # Agent logic (Model + Tools + Instructions)
+│   ├── cli.py         # CLI entry point (Typer)
+│   ├── agent.py       # Agent logic (ReAct loop, system prompt)
+│   ├── alerts.py      # Deterministic severity scoring
 │   └── k8s_client.py  # K8s data collection (kubectl + mock fallback)
-├── tests/
+├── web/
+│   ├── index.html     # 3-tab layout (Projects, Live Demo, Model Comparison)
+│   ├── script.js      # Tab switching, charts, pod table, marked.js rendering
+│   └── style.css      # Clean minimal design
+├── server.py          # FastAPI server (/health, /pods, /analyze, /scenarios)
+├── Makefile           # make serve
+├── pyproject.toml     # Dependencies (fastapi, uvicorn, litellm, etc.)
+├── .env               # API keys and model config
 └── README.md
 ```
 

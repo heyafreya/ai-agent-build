@@ -29,10 +29,13 @@ class PodInfo(BaseModel):
 # ── Scenario selector ──────────────────────────────────────────────
 
 _current_scenario: str = "mixed"
+_composite_cache: dict[str, list[dict]] = {}
 
 
 def set_scenario(name: str):
-    global _current_scenario
+    global _current_scenario, _composite_cache
+    if name != _current_scenario:
+        _composite_cache.clear()
     _current_scenario = name
 
 
@@ -368,12 +371,19 @@ def get_pods(namespace: str | None = None) -> list[PodInfo]:
     """Collect pod information from the cluster or mock data.
 
     Auto-detects whether a real cluster is available.
+    Composite scenarios are cached so /health and /analyze share the same pod set.
     """
     if _has_kubectl() and _cluster_reachable():
         raw_pods = _get_live_pods(namespace)
     else:
         found = _SCENARIOS.get(_current_scenario, _MOCK_PODS)
-        raw_pods = _build_composite_scenario() if found == "dynamic" else found
+        if found == "dynamic":
+            cache_key = _current_scenario
+            if cache_key not in _composite_cache:
+                _composite_cache[cache_key] = _build_composite_scenario()
+            raw_pods = _composite_cache[cache_key]
+        else:
+            raw_pods = found
         if namespace:
             raw_pods = [p for p in raw_pods if p["namespace"] == namespace]
 
@@ -381,6 +391,116 @@ def get_pods(namespace: str | None = None) -> list[PodInfo]:
 
 
 _MOCK_DESCRIBE = {
+    "web-frontend": (
+        "Name:             web-frontend-6f8d9c4b5a-x1y2z\n"
+        "Namespace:        frontend\n"
+        "Status:           Running\n"
+        "Restarts:         0\n"
+        "Conditions:\n"
+        "  Type           Status  Reason\n"
+        "  ---           ------  ------\n"
+        "  Initialized    True    True\n"
+        "  Ready          True    \n"
+        "  ContainersReady True   \n"
+        "Events:\n"
+        "  Type     Reason    Age   From               Message\n"
+        "  ----     ------    ---   ----               -------\n"
+        "  Normal   Pulled    14d   kubelet            Container image pulled successfully\n"
+        "  Normal   Created   14d   kubelet            Created container\n"
+        "  Normal   Started   14d   kubelet            Started container\n"
+    ),
+    "api-gateway": (
+        "Name:             api-gateway-7a9b8c6d5e-p3q4r\n"
+        "Namespace:        api\n"
+        "Status:           Running\n"
+        "Restarts:         1\n"
+        "Conditions:\n"
+        "  Type           Status  Reason\n"
+        "  ---           ------  ------\n"
+        "  Initialized    True    True\n"
+        "  Ready          True    \n"
+        "  ContainersReady True   \n"
+        "Events:\n"
+        "  Type     Reason    Age   From               Message\n"
+        "  ----     ------    ---   ----               -------\n"
+        "  Normal   Pulled    60d   kubelet            Container image pulled successfully\n"
+        "  Normal   Created   60d   kubelet            Created container\n"
+        "  Normal   Started   60d   kubelet            Started container\n"
+        "  Warning  Unhealthy 55d   kubelet            Liveness probe failed: HTTP probe failed\n"
+    ),
+    "user-service-db": (
+        "Name:             user-service-db-0\n"
+        "Namespace:        database\n"
+        "Status:           Running\n"
+        "Restarts:         0\n"
+        "Conditions:\n"
+        "  Type           Status  Reason\n"
+        "  ---           ------  ------\n"
+        "  Initialized    True    True\n"
+        "  Ready          True    \n"
+        "  ContainersReady True   \n"
+        "Events:\n"
+        "  Type     Reason    Age   From               Message\n"
+        "  ----     ------    ---   ----               -------\n"
+        "  Normal   Pulled    90d   kubelet            Container image pulled successfully\n"
+        "  Normal   Created   90d   kubelet            Created container\n"
+        "  Normal   Started   90d   kubelet            Started container\n"
+    ),
+    "auth-service": (
+        "Name:             auth-service-5f7g8h9j0k-l2m3n\n"
+        "Namespace:        security\n"
+        "Status:           Running\n"
+        "Restarts:         0\n"
+        "Conditions:\n"
+        "  Type           Status  Reason\n"
+        "  ---           ------  ------\n"
+        "  Initialized    True    True\n"
+        "  Ready          True    \n"
+        "  ContainersReady True   \n"
+        "Events:\n"
+        "  Type     Reason    Age   From               Message\n"
+        "  ----     ------    ---   ----               -------\n"
+        "  Normal   Pulled    30d   kubelet            Container image pulled successfully\n"
+        "  Normal   Created   30d   kubelet            Created container\n"
+        "  Normal   Started   30d   kubelet            Started container\n"
+    ),
+    "nginx-deploy": (
+        "Name:             nginx-deploy-7c8b9d4f8f-abc12\n"
+        "Namespace:        default\n"
+        "Status:           Running\n"
+        "Restarts:         0\n"
+        "Conditions:\n"
+        "  Type           Status  Reason\n"
+        "  ---           ------  ------\n"
+        "  Initialized    True    True\n"
+        "  Ready          True    \n"
+        "  ContainersReady True   \n"
+        "Events:\n"
+        "  Type     Reason    Age   From               Message\n"
+        "  ----     ------    ---   ----               -------\n"
+        "  Normal   Pulled    12d   kubelet            Container image pulled successfully\n"
+        "  Normal   Created   12d   kubelet            Created container\n"
+        "  Normal   Started   12d   kubelet            Started container\n"
+    ),
+    "cron-job-scheduler": (
+        "Name:             cron-job-scheduler-6h5g4f3d2s-a1b2c\n"
+        "Namespace:        default\n"
+        "Status:           Running\n"
+        "Restarts:         2\n"
+        "Conditions:\n"
+        "  Type           Status  Reason\n"
+        "  ---           ------  ------\n"
+        "  Initialized    True    True\n"
+        "  Ready          True    \n"
+        "  ContainersReady True   \n"
+        "Events:\n"
+        "  Type     Reason    Age   From               Message\n"
+        "  ----     ------    ---   ----               -------\n"
+        "  Normal   Pulled    30d   kubelet            Container image pulled successfully\n"
+        "  Normal   Created   30d   kubelet            Created container\n"
+        "  Normal   Started   30d   kubelet            Started container\n"
+        "  Warning  Unhealthy 25d   kubelet            Liveness probe failed: timeout\n"
+    ),
     "payment-processor": (
         "Name:             payment-processor-b7c8d9e0f1-g5h6j\n"
         "Namespace:        payments\n"
@@ -485,6 +605,36 @@ def describe_pod(name: str, namespace: str = "default") -> str:
 
 
 _MOCK_LOGS = {
+    "web-frontend": (
+        "2026-07-14 08:00:01 [INFO] [server.py:10] Frontend server started on port 3000\n"
+        "2026-07-14 08:00:02 [INFO] [server.py:15] Connected to API gateway\n"
+        "2026-07-14 08:00:03 [INFO] [server.py:18] Static assets loaded successfully\n"
+    ),
+    "api-gateway": (
+        "2026-07-14 08:00:01 [INFO] [gateway.py:12] API gateway listening on port 8080\n"
+        "2026-07-14 08:00:02 [INFO] [gateway.py:18] Upstream services registered: user-service, auth-service\n"
+        "2026-07-14 08:00:03 [WARN] [gateway.py:25] Rate limit threshold reached for client 10.0.0.1\n"
+    ),
+    "user-service-db": (
+        "2026-07-14 08:00:01 [INFO] [postgres.py:8] PostgreSQL 15.3 ready to accept connections\n"
+        "2026-07-14 08:00:02 [INFO] [postgres.py:12] Database 'users' initialized\n"
+        "2026-07-14 08:00:03 [INFO] [postgres.py:15] Connection pool: 10 connections active\n"
+    ),
+    "auth-service": (
+        "2026-07-14 08:00:01 [INFO] [auth.py:10] Auth service started\n"
+        "2026-07-14 08:00:02 [INFO] [auth.py:14] JWT validation active\n"
+        "2026-07-14 08:00:03 [INFO] [auth.py:18] OAuth2 providers configured: google, github\n"
+    ),
+    "nginx-deploy": (
+        "2026-07-14 08:00:01 [notice] 1#1: signal process started\n"
+        "2026-07-14 08:00:01 [info] 1#1: start worker processes\n"
+        "2026-07-14 08:00:02 [info] 1#1: start worker process 1\n"
+    ),
+    "cron-job-scheduler": (
+        "2026-07-14 08:00:01 [INFO] [scheduler.py:10] Cron scheduler started\n"
+        "2026-07-14 08:00:02 [INFO] [scheduler.py:14] Next job: cleanup-temp at 02:00 UTC\n"
+        "2026-07-14 08:00:03 [INFO] [scheduler.py:18] 3 scheduled jobs active\n"
+    ),
     "payment-processor": (
         "2026-07-14 12:01:03 [ERROR] [payment_processor.py:45] connection to upstream timeout after 30s\n"
         "2026-07-14 12:01:03 [ERROR] [payment_processor.py:46] Transaction ID: tx-7f3a9c2e — status: PENDING\n"
