@@ -1,4 +1,4 @@
-.PHONY: install run lint fmt clean
+.PHONY: install run serve lint fmt clean
 
 install:
 	@command -v uv >/dev/null 2>&1 || { echo "uv not found. First install? Run: curl -LsSf https://astral.sh/uv/install.sh | sh && source ~/.zshrc"; exit 1; }
@@ -12,6 +12,9 @@ install:
 
 run:
 	uv run python -m 01-k8s-health-monitor.src.cli
+
+serve:
+	uv run python 01-k8s-health-monitor/server.py
 
 lint:
 	uv run pre-commit run ruff --all-files

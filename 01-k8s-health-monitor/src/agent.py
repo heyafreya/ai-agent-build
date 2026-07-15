@@ -46,9 +46,6 @@ FINAL ANSWER:
 - **Suggested Fix**: [specific actionable fix]
 - **Evidence**: [key log line or event]
 
-## Healthy Namespaces
-[list]
-
 ## Overall Health Score: Healthy / Degraded / Critical
 
 CRITICAL RULES:
@@ -59,6 +56,10 @@ CRITICAL RULES:
 - You already ran GET_PODS and have the pod list. Do NOT call GET_PODS again.
 - After gathering information from DESCRIBE_POD or GET_LOGS, produce FINAL ANSWER.
 - Your output must begin with the tool name on its own line, or begin with "FINAL ANSWER:".
+- Health score rules:
+  - If ALL pods are Running with restarts < 3 and ready ratios are full (e.g. 1/1, 2/2), the score MUST be "Healthy".
+  - Only use "Degraded" if at least one pod has restarts >= 3 or a partial ready ratio.
+  - Only use "Critical" if any pod is in CrashLoopBackOff, Error, ImagePullBackOff, or OOMKilled.
   Examples of correct tool calls:
   GET_LOGS payment-processor-b7c8d9e0f1-g5h6j payments
   DESCRIBE_POD cache-redis-2f4g6h8j0k-m3n4b cache
@@ -136,20 +137,45 @@ Available tools:
     return SYSTEM_PROMPT, user_prompt
 
 
-def analyze(namespace: str | None = None) -> str:
+def analyze(namespace: str | None = None, focus_pod: str | None = None) -> str:
     """Run the agent with ReAct-style tool iteration.
 
     The agent starts by listing pods, then iteratively investigates
     unhealthy pods by calling describe and logs tools.
+    If focus_pod is set, the agent investigates only that specific pod.
     """
     conversation: list[str] = []
-    max_iterations = 6
-    # Start: get pods
-    tool_result = _mock_get_pods(namespace)
-    conversation.append(f"Tool result:\n{tool_result}")
+    max_iterations = 8
+    pods = get_pods(namespace)
+
+    # Inject actual pod names into the prompt to prevent hallucination
+    pod_names = [p.name for p in pods]
+    system = (
+        SYSTEM_PROMPT + "\n\nEXISTING PODS (you may only reference these):\n" + "\n".join(f"- {n}" for n in pod_names)
+    )
+
+    if focus_pod:
+        # Skip GET_PODS — go straight to investigating the focused pod
+        system += (
+            f"\n\nFOCUS MODE: You are investigating a SINGLE pod: '{focus_pod}'. "
+            "Do NOT call GET_PODS. Start by calling DESCRIBE_POD or GET_LOGS on this pod. "
+            "Report ONLY on this pod. Do not mention other pods."
+        )
+        # Find the focused pod's namespace for the tool call
+        focus_ns = namespace
+        for p in pods:
+            if p.name == focus_pod:
+                focus_ns = p.namespace
+                break
+        tool_result = _mock_describe_pod(focus_pod, focus_ns or "default")
+        conversation.append(f"Tool result (describe {focus_pod}):\n{tool_result}")
+    else:
+        # Start: get pods
+        tool_result = _mock_get_pods(namespace)
+        conversation.append(f"Tool result:\n{tool_result}")
 
     for i in range(max_iterations):
-        system, user = _generate_prompt(tool_result, conversation)
+        _, user = _generate_prompt(tool_result, conversation)
 
         response = chat(
             system_prompt=system,
@@ -177,11 +203,16 @@ def analyze(namespace: str | None = None) -> str:
     return "Agent reached maximum iterations. Here's what was found:\n\n" + "\n\n".join(conversation)
 
 
-def analyze_with_alerts(namespace: str | None = None) -> str:
+def analyze_with_alerts(namespace: str | None = None, focus_pod: str | None = None) -> str:
     """Run the agent's ReAct loop and append a deterministic alert severity summary."""
 
     pods = get_pods(namespace)
-    llm_result = analyze(namespace)
+    llm_result = analyze(namespace, focus_pod=focus_pod)
+
+    # If focusing on a single pod, only show that pod in the alert block
+    if focus_pod:
+        pods = [p for p in pods if p.name == focus_pod]
+
     counts = severity_counts(pods)
     order = ["critical", "warning", "healthy"]
     severity_parts = []
