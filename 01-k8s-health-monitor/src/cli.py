@@ -15,7 +15,7 @@ import typer
 from rich.console import Console
 from rich.markdown import Markdown
 
-from .agent import analyze
+from .agent import analyze_with_alerts
 from .k8s_client import set_scenario
 
 app = typer.Typer(
@@ -65,7 +65,7 @@ def health(
 
 def _run_analysis(namespace: str | None):
     console.print("[dim]Investigating cluster...[/]")
-    result = analyze(namespace)
+    result = analyze_with_alerts(namespace)
     console.print(Markdown(result))
 
 
