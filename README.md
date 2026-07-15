@@ -39,15 +39,34 @@ Built interactively using **ChatGPT** for design exploration and **Opencode** fo
 
 </details>
 <details>
-<summary><strong>2026-07-14</strong> — TBD</summary>
+<summary><strong>2026-07-14</strong> — ReAct agent loop + mock scenarios</summary>
 
 ### What was done
 
-- TBD
+- Replaced one-shot LLM call with a **ReAct loop**: agent calls `GET_LOGS` and `DESCRIBE_POD` iteratively, deciding which tool to use based on pod state
+- Added `get_logs()` to `k8s_client.py` with mock logs for each failure type (ModuleNotFoundError, OOM, disk full, network timeout, image pull failure)
+- Added 5 solo error scenarios (`solo-crashloop`, `solo-error`, `solo-imagepull`, `solo-pending`, `solo-oom`) — 7 healthy + 1 failing pod each
+- Added `composite` scenario (default) — dynamically picks 2-3 random bad pods from the pool of 5, so every run is different
+- Added `--scenario` / `-s` CLI flag to select mock data
+- Added dedup/repetition guards to the ReAct loop to prevent infinite tool calls
+- Removed `--describe` flag (agent decides when to dig deeper)
 
 ### Key learnings
 
-- TBD
+- ReAct loops need repetition guards — LLMs will happily call `GET_PODS` twice and get the same data
+- Mock data quality matters more than quantity: realistic log lines (timestamps, stack traces, error codes) make the agent's output far more convincing
+- Composing scenarios from a healthy base + bad pod variants is cleaner than hardcoding each scenario
+
+</details>
+<details>
+<summary><strong>2026-07-15</strong> — Repo tooling: uv, pre-commit, ruff</summary>
+
+### What was done
+
+- Switched from pip/requirements.txt to **uv** (pyproject.toml + uv.lock)
+- Added pre-commit hooks: ruff lint/format + conventional commit enforcement
+- Updated Makefile to use `uv run` — no manual venv activation needed
+- Updated `.gitignore` and removed `requirements.txt`
 
 </details>
 
@@ -57,7 +76,7 @@ Built interactively using **ChatGPT** for design exploration and **Opencode** fo
 
 | #   | Project                                      | Status           | Description                    |
 | --- | -------------------------------------------- | ---------------- | ------------------------------ |
-| 01  | [K8s Health Monitor](01-k8s-health-monitor/) | Initial scaffold | Pod health summarization agent |
+| 01  | [K8s Health Monitor](01-k8s-health-monitor/) | ReAct agent + scenarios | Pod health summarization agent with iterative tool use |
 
 ---
 
