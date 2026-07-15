@@ -64,6 +64,11 @@ Built interactively using **ChatGPT** for design exploration and **Opencode** fo
 ## Setup
 
 ```bash
+# First-time uv install:
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source ~/.zshrc    # reload PATH
+
+# Then:
 make install    # creates .venv + installs deps
 source .venv/bin/activate
 cp .env.example .env
