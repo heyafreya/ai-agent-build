@@ -214,6 +214,52 @@ Key pod statuses an agent needs to understand:
 
 ## Web UI: Session Learnings & Challenges
 
+### July 12, 2026 — Agent Design Foundations
+
+Read [A Practical Guide to Building AI Agents](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/) (OpenAI) before starting implementation.
+
+**Core insight**: An agent is not just an LLM — it's three components working together:
+
+- **Model**: The LLM powering reasoning and decision-making. This is the "brain." Can be GPT-4, Claude, Gemini, Llama — anything accessible via API.
+- **Tools**: External functions or APIs the agent can call to take action. Without tools, an LLM can only produce text. With tools, it can query databases, run commands, send emails, read files, etc.
+- **Instructions**: Explicit guidelines and guardrails defining how the agent behaves. The system prompt — it tells the agent what to do, how to format output, and what rules to follow.
+
+This framework shaped how `agent.py` was built: `shared/llm.py` is the Model, `src/k8s_client.py` provides the Tools, and `src/agent.py:SYSTEM_PROMPT` defines the Instructions.
+
+Reference: OpenAI's Agents SDK implements the same pattern. You can also build it from scratch with any LLM library.
+
+---
+
+### July 13, 2026 — Kubernetes Knowledge Refresh
+
+Relearned core Kubernetes concepts needed for this project:
+
+**A Kubernetes Pod** is the smallest deployable unit in Kubernetes that runs one or more application containers. Pods provide an abstraction layer that includes:
+
+- Shared storage volumes
+- A single IP address shared by all containers in the pod
+- Inter-container communication over localhost
+- Host-level information for running containers
+
+This architecture allows closely related containers to communicate efficiently while maintaining isolation from other pods.
+
+**Key pod statuses** the agent needs to understand:
+
+| Status | Meaning |
+|--------|---------|
+| Running | Pod is operating normally |
+| Pending | Not yet started (scheduling, pulling image) |
+| CrashLoopBackOff | Container keeps crashing and restarting |
+| ImagePullBackOff | Can't pull the container image |
+| Completed | Job finished successfully |
+| Error | Container exited with error code |
+
+This knowledge directly informed the severity scoring logic in `alerts.py` and the tool design in `k8s_client.py`.
+
+---
+
+### July 14, 2026 — Web UI Build
+
 ### What Was Built
 
 Transformed the CLI agent into a local web interface with three tabs: **Projects** (summary), **Live Demo** (interactive analysis), and **Model Comparison** (future). The Live Demo tab runs the ReAct agent against mock K8s clusters with a pod dropdown, severity charts, namespace breakdown, and an LLM-generated analysis rendered as markdown.
@@ -280,48 +326,95 @@ Table cells inherited `color: var(--text-secondary)` from `#output`, making them
 ## Quick Start
 
 ```bash
-# Install dependencies
-pip install -r requirements.txt
+# From the repo root:
 
-# Set up your LLM provider (copy and edit)
+# Install dependencies (requires uv — https://docs.astral.sh/uv/)
+make install
+
+# Configure your LLM provider
 cp .env.example .env
-# Edit .env with your API key
+# Edit .env — add your API key (Gemini free tier works: https://aistudio.google.com/apikey)
 
-# Run the agent (uses mock data by default — no cluster needed)
-python -m 01-k8s-health-monitor.src.cli
+# Run the CLI
+make run
+
+# Or run the web UI
+make serve
+# Open http://localhost:8080
 ```
 
-### Using a real cluster
-
-1. Install [Kind](https://kind.sigs.k8s.io/) or start a cluster
-2. Ensure `kubectl` is configured:
-   ```bash
-   kubectl cluster-info
-   ```
-3. Run the agent — it auto-detects the cluster
+No Kubernetes cluster needed — the agent uses realistic mock data by default. It auto-detects a live cluster if `kubectl` can reach one.
 
 ---
 
 ## Usage
 
+### CLI
+
 ```bash
-# Basic health check (all namespaces)
-python -m 01-k8s-health-monitor.src.cli
+# Default analysis (composite scenario with random bad pods)
+uv run python -m 01-k8s-health-monitor.src.cli
+
+# Specific scenario
+uv run python -m 01-k8s-health-monitor.src.cli -s solo-oom
 
 # Filter by namespace
-python -m 01-k8s-health-monitor.src.cli --namespace default
-
-# Include detailed pod descriptions for unhealthy pods
-python -m 01-k8s-health-monitor.src.cli --describe
+uv run python -m 01-k8s-health-monitor.src.cli -n default
 
 # Watch mode — re-analyze every 30 seconds
-python -m 01-k8s-health-monitor.src.cli --watch
-
-# Or install and use directly:
-pip install -e .
-k8s-health
-k8s-health --namespace default --describe
+uv run python -m 01-k8s-health-monitor.src.cli -w
 ```
+
+Available scenarios: `healthy`, `crashing`, `composite`, `solo-crashloop`, `solo-error`, `solo-imagepull`, `solo-pending`, `solo-oom`
+
+### Web UI
+
+```bash
+make serve
+# Open http://localhost:8080
+```
+
+| Tab | Features |
+|-----|----------|
+| **Projects** | Architecture docs, component reference, learning notes |
+| **Live Demo** | Scenario/pod dropdowns, severity charts, namespace breakdown, agent trace (expandable), chat follow-up |
+| **Model Comparison** | Run same scenario across multiple models, side-by-side latency/tokens/accuracy cards |
+| **Evaluation** | Score agent against 6 ground-truth scenarios, pass/fail scorecard |
+
+---
+
+## How Model Comparison Works
+
+The Model Comparison tab runs the **same scenario** across multiple LLM providers and shows results side-by-side. Here's the flow:
+
+1. **User picks a scenario** (e.g. `solo-oom`, `composite`) and clicks "Compare Models"
+2. **Backend runs the agent in parallel** using `ThreadPoolExecutor` — one thread per model. Each thread calls `agent.analyze()` with a different `model` parameter (e.g. `gemini/gemini-2.0-flash-exp`, `openai/gpt-4o-mini`, `anthropic/claude-3-5-haiku-20241022`, `ollama/llama3.2:3b`)
+3. **Each model gets the same prompt, same tools, same mock data.** The only variable is the model itself.
+4. **Results are collected** with per-model metadata: latency (ms), token counts, health score assigned, number of issues found, full analysis text, and the complete agent trace.
+5. **UI renders comparison cards** sorted by latency (fastest first), each showing metrics and a truncated analysis with "Show full output" expandable.
+
+**What you can compare:**
+
+| Metric | What it tells you |
+|--------|-------------------|
+| Latency | How fast each model produces an analysis |
+| Token usage | Cost proxy (more tokens = more expensive) |
+| Health score | Whether the model correctly identifies Critical/Degraded/Healthy |
+| Issue count | How many problems the model found |
+| Full output | Quality and specificity of root causes and fixes |
+| Agent trace | How many tool calls each model needed, where it got confused |
+
+**Models included by default:**
+
+| Model | Provider | Notes |
+|-------|----------|-------|
+| `gemini/gemini-2.0-flash-exp` | Google | Free tier, fast |
+| `openai/gpt-4o-mini` | OpenAI | Cheap, good quality |
+| `anthropic/claude-3-5-haiku-20241022` | Anthropic | Fast, high quality |
+| `ollama/llama3.2:3b` | Local | Free, runs on your machine |
+| `ollama/mistral:7b` | Local | Free, larger local model |
+
+**Requirements:** Add API keys for the providers you want to compare to `.env`. Ollama models work locally if you have `ollama serve` running.
 
 ---
 
@@ -331,18 +424,19 @@ k8s-health --namespace default --describe
 01-k8s-health-monitor/
 ├── src/
 │   ├── __init__.py
-│   ├── cli.py         # CLI entry point (Typer)
-│   ├── agent.py       # Agent logic (ReAct loop, system prompt)
-│   ├── alerts.py      # Deterministic severity scoring
-│   └── k8s_client.py  # K8s data collection (kubectl + mock fallback)
+│   ├── cli.py             # CLI entry point (Typer)
+│   ├── agent.py           # ReAct agent loop + trace capture + chat follow-up
+│   ├── alerts.py          # Deterministic severity scoring (LLM-independent)
+│   ├── k8s_client.py      # Pod collector with mock fallback
+│   ├── comparison.py      # Multi-model parallel comparison
+│   └── eval.py            # Evaluation framework with ground-truth scoring
 ├── web/
-│   ├── index.html     # 3-tab layout (Projects, Live Demo, Model Comparison)
-│   ├── script.js      # Tab switching, charts, pod table, marked.js rendering
-│   └── style.css      # Clean minimal design
-├── server.py          # FastAPI server (/health, /pods, /analyze, /scenarios)
-├── Makefile           # make serve
-├── pyproject.toml     # Dependencies (fastapi, uvicorn, litellm, etc.)
-├── .env               # API keys and model config
+│   ├── index.html         # 4-tab layout (Projects, Live Demo, Comparison, Eval)
+│   ├── script.js          # Charts, trace rendering, comparison grid, chat
+│   └── style.css          # Clean minimal design + component styles
+├── server.py              # FastAPI server (/health, /pods, /analyze, /chat, /compare, /eval)
+├── pyproject.toml         # Dependencies (fastapi, uvicorn, litellm, etc.)
+├── .env                   # API keys and model config (not committed)
 └── README.md
 ```
 
@@ -354,20 +448,46 @@ See `.env.example` for all config options:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `gemini` | Which provider to use |
 | `AGENT_MODEL` | `gemini/gemini-2.0-flash-exp` | Full model identifier for litellm |
-| `GEMINI_API_KEY` | — | Your Gemini API key |
-| `OPENAI_API_KEY` | — | Your OpenAI API key |
-| `ANTHROPIC_API_KEY` | — | Your Anthropic API key |
+| `GEMINI_API_KEY` | — | Your Gemini API key (free tier) |
+| `OPENAI_API_KEY` | — | Your OpenAI API key (for comparison) |
+| `ANTHROPIC_API_KEY` | — | Your Anthropic API key (for comparison) |
 | `GROQ_API_KEY` | — | Your Groq API key |
+
+For model comparison, add API keys for the providers you want to benchmark. The default analysis only needs one provider (Gemini free tier works).
+
+---
+
+## API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health?scenario=composite` | GET | Deterministic pod health (no LLM call) |
+| `/pods?scenario=composite` | GET | Pod list for UI dropdown |
+| `/analyze?scenario=composite&pod=<name>&model=<id>` | GET | Full agent analysis with trace |
+| `/chat` | POST | Follow-up chat (`{message, conversation_id}`) |
+| `/compare` | POST | Multi-model comparison (`{scenario, models?}`) |
+| `/eval` | POST | Evaluation scorecard (`{model?}`) |
+| `/models` | GET | List available comparison models |
+| `/scenarios` | GET | List available mock scenarios |
 
 ---
 
 ## Roadmap
 
+- [x] Alert thresholds (deterministic severity scoring)
+- [x] Web UI with interactive demo
+- [x] Structured JSON output (reliable tool parsing)
+- [x] Agent trace capture + debug view
+- [x] Model comparison (multi-provider benchmarking)
+- [x] Evaluation framework (ground-truth scoring)
+- [x] Chat follow-up (interactive investigation)
 - [ ] Support `--output json` for machine-readable output
 - [ ] Add Slack/email notifications for unhealthy pods
 - [ ] Add historical analysis — track health over time
 - [ ] Support filtering by label selectors
 - [ ] Deploy as a Kubernetes CronJob that posts to a channel
-- [ ] Add alert thresholds (e.g. "if restarts > 5, flag as critical")
+- [ ] Streaming responses (real-time agent thinking in web UI)
+- [ ] Additional tools: GET_EVENTS, GET_DEPLOYMENTS, GET_RESOURCE_QUOTA
+- [ ] Persistent conversation store (SQLite instead of in-memory)
+- [ ] More eval cases (multi-pod cascading failures, namespace isolation)

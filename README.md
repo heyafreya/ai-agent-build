@@ -1,179 +1,154 @@
 # ai-agent-build
 
-A collection of agentic AI projects, exploring the **Model → Tools → Instructions** pattern for practical infrastructure and developer workflows.
+My entry for the **Boston Kubernetes Meetup AI Agent Build Competition** — a skills-building competition where the goal isn't to build the fanciest agent, it's to practice a new skill, document what you learned, and publish it so others can learn too.
 
-Built interactively using **ChatGPT** for design exploration and **Opencode** for scaffold + implementation.
-
----
-
-## Journal
-
-<details>
-<summary><strong>2026-07-13</strong> — K8s Health Monitor: scaffold + agent loop</summary>
-
-### What was done
-
-- Scaffolded the `01-k8s-health-monitor/` project with full source layout
-- Implemented `k8s_client.py` — pod data collector using `subprocess` + `kubectl` with automatic mock fallback (10 realistic pods across statuses: Running, CrashLoopBackOff, Pending, ImagePullBackOff)
-- Implemented `agent.py` — core agent wiring: collects pod data → formats as table → sends to LLM with a system prompt → returns plain-English health summary
-- Implemented `cli.py` — Typer CLI with `--namespace`, `--describe`, `--watch` flags
-- Created `shared/llm.py` — litellm-based LLM client supporting Gemini free tier, Groq, Anthropic, OpenAI, Ollama, and 100+ providers
-- Documented all learning in the subproject README: agent design foundations, litellm, subprocess, kubectl, kubepod lifecycle, typer, pydantic, rich
-
-### Key decisions
-
-| Decision        | Choice               | Rationale                                                                         |
-| --------------- | -------------------- | --------------------------------------------------------------------------------- |
-| LLM abstraction | litellm              | Swap providers by changing one env var; Gemini free tier for dev, Claude for prod |
-| K8s interaction | subprocess + kubectl | Zero config overhead; no SDK auth to set up; auto-detects cluster vs mock         |
-| CLI framework   | typer                | Type-hint driven, auto --help, minimal boilerplate                                |
-| Data modeling   | pydantic             | Type-safe PodInfo models with zero-effort validation                              |
-| Terminal output | rich                 | Markdown rendering of LLM responses directly in terminal                          |
-
-### Questions answered
-
-- **OpenAI vs Anthropic?** Both work. Claude is better at structured output for multi-pod analysis. litellm makes swapping trivial.
-- **Do I need a cluster?** No — mock data is built in for dev. Switch to live by installing Kind or pointing at any cluster.
-- **Is this free?** Yes — Gemini free tier (60 req/min) or Ollama (local, no API key).
-- **subprocess vs K8s SDK?** subprocess is simpler for read-only queries. SDK adds complexity without benefit for this use case.
-
-### Why this matters
-
-This established the foundation: without scaffolding and a CLI, there's no way to interact with the agent. Choosing litellm from day one meant zero lock-in — the agent can switch from Gemini (free dev) to Claude (production) by changing one env var. Using `subprocess` + `kubectl` over the K8s SDK kept dependencies minimal and behavior transparent.
-
-</details>
-<details>
-<summary><strong>2026-07-14</strong> — ReAct agent loop + mock scenarios</summary>
-
-### What was done
-
-- Replaced one-shot LLM call with a **ReAct loop**: agent calls `GET_LOGS` and `DESCRIBE_POD` iteratively, deciding which tool to use based on pod state
-- Added `get_logs()` to `k8s_client.py` with mock logs for each failure type (ModuleNotFoundError, OOM, disk full, network timeout, image pull failure)
-- Added 5 solo error scenarios (`solo-crashloop`, `solo-error`, `solo-imagepull`, `solo-pending`, `solo-oom`) — 7 healthy + 1 failing pod each
-- Added `composite` scenario (default) — dynamically picks 2-3 random bad pods from the pool of 5, so every run is different
-- Added `--scenario` / `-s` CLI flag to select mock data
-- Added dedup/repetition guards to the ReAct loop to prevent infinite tool calls
-- Removed `--describe` flag (agent decides when to dig deeper)
-
-### Key learnings
-
-- ReAct loops need repetition guards — LLMs will happily call `GET_PODS` twice and get the same data
-- Mock data quality matters more than quantity: realistic log lines (timestamps, stack traces, error codes) make the agent's output far more convincing
-- Composing scenarios from a healthy base + bad pod variants is cleaner than hardcoding each scenario
-
-### Why this matters
-
-A one-shot LLM call can only analyse data you give it. The ReAct loop transforms the agent from a passive summariser into an active investigator — it decides which pods to dig into, calls `GET_LOGS` and `DESCRIBE_POD` on its own, and iterates until it has enough evidence. This mirrors how a human SRE would troubleshoot: glance at the dashboard, then drill into the failing pods. The repetition guards prevent infinite loops (a common failure mode for agents).
-
-</details>
-<details>
-<summary><strong>2026-07-14</strong> — Repo tooling: uv, pre-commit, ruff</summary>
-
-### What was done
-
-- Switched from pip/requirements.txt to **uv** (pyproject.toml + uv.lock)
-- Added pre-commit hooks: ruff lint/format + conventional commit enforcement
-- Updated Makefile to use `uv run` — no manual venv activation needed
-- Updated `.gitignore` and removed `requirements.txt`
-
-### Why this matters
-
-uv is dramatically faster than pip (no dependency resolution on every install) and locks dependencies deterministically. Pre-commit hooks catch formatting issues and enforce conventional commits before code ever lands — this keeps the git history clean and reviewable. Ruff replaces both flake8 + isort + black with a single tool that runs in milliseconds.
-
-</details>
-<details>
-<summary><strong>2026-07-14</strong> — Alert thresholds: deterministic pod severity scoring</summary>
-
-### What was done
-
-- Created `alerts.py` — pure-function severity module independent of the LLM
-  - `score_pod()` — maps a `PodInfo` to `"critical"`, `"warning"`, or `"healthy"` using status checks, restart thresholds (≥5 critical, ≥3 warning), and ready-container ratios (0 critical, partial warning)
-  - `sorted_pods()` — orders pods by descending severity
-  - `severity_counts()` — returns a dict tally of each severity level
-  - `severity_stats()` — one-line human-readable summary (e.g. "2 critical, 1 warning, 6 healthy")
-- Wired alerts into `agent.py` via `analyze_with_alerts()` — runs the ReAct loop then appends a deterministic alert summary below the LLM response
-- Wired alerts into `cli.py` — output now includes LLM analysis + severity block
-- Deleted duplicate/broken draft `alerts.py` from `ai_agent_build/`
-- Fixed pluralization bug ("healthys" → "healthy") in severity output
-
-### Key learnings
-
-- Deterministic scoring provides a reliable safety net beneath the LLM — if the model hallucinates, the threshold block is still correct
-- Post-hoc appendix pattern (run LLM first, append alerts after) keeps the agent prompt unchanged and is trivial to wire in
-- Pluralization edge cases matter for UX: "healthy" is uncountable ("6 healthy" not "6 healthys")
-
-### Why this matters
-
-LLMs are not deterministic — the same pod data can produce different summaries on different runs. The alert threshold module provides a **deterministic safety net**: no matter what the LLM says, the severity block underneath is computed from hard rules. If the LLM hallucinates a healthy pod as critical or misses an ImagePullBackOff, the alerts don't lie. This is the "belt and suspenders" approach to AI reliability.
-
-</details>
+I hadn't built an agent before and don't have extensive Kubernetes experience. This project let me learn both at the same time by building something real: an AI agent that monitors a Kubernetes cluster and explains what's wrong in plain English.
 
 ---
 
-## Projects
+## What I Built
 
-| #   | Project                                      | Status           | Description                    |
-| --- | -------------------------------------------- | ---------------- | ------------------------------ |
-| 01  | [K8s Health Monitor](01-k8s-health-monitor/) | Alert thresholds wired | Pod health summarization agent with ReAct loop + deterministic alert scoring |
+An AI agent that investigates pod health and produces actionable summaries. Give it a cluster (or use the built-in mock data) and it will:
 
----
+1. List all pods and identify the unhealthy ones
+2. Investigate each failure by pulling logs and descriptions
+3. Explain the root cause and suggest a fix
+4. Score severity with deterministic rules (independent of the LLM)
 
-## Setup
+Run it from the CLI or open the web UI — there's a Live Demo tab, Model Comparison tab (benchmark different LLMs side-by-side), and an Evaluation tab that scores the agent's accuracy.
+
+## How to Run
 
 ```bash
-# First-time uv install:
+# Install uv (fast Python package manager)
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source ~/.zshrc    # reload PATH
+source ~/.zshrc
 
-# Then:
-make install    # creates .venv + installs deps
-source .venv/bin/activate
+# Setup
+git clone <repo-url>
+cd ai-agent-build
+make install
+
+# Configure an LLM (Gemini free tier works)
 cp .env.example .env
-# edit .env with your API key
-make run        # or: python -m 01-k8s-health-monitor.src.cli
+# Edit .env — add your API key
+
+# CLI
+make run
+
+# Web UI
+make serve
+# Open http://localhost:8080
 ```
 
-## Repo structure
+No Kubernetes cluster needed — mock data is built in. The agent auto-detects a live cluster if `kubectl` can reach one.
+
+## What I Learned
+
+**The Model-Tools-Instructions pattern.** An agent isn't just an LLM — it's a model (the brain), tools (what it can do), and instructions (how it behaves). The system prompt is where most of the agent's personality and reliability comes from.
+
+**LLMs fabricate data without guardrails.** Without an explicit pod list in the prompt, the model invents pod names that don't exist. Adding `EXISTING PODS` to the system prompt fixed this — the agent can only reference real pods.
+
+**Deterministic scoring as a safety net.** LLMs aren't deterministic — the same input can produce different outputs. I added a pure-function severity scorer (`alerts.py`) that runs alongside the LLM. No matter what the model says, the severity block underneath is computed from hard rules.
+
+**Regex parsing is fragile.** The original agent used regex to parse tool calls from freeform LLM text. Any markdown formatting broke it. Switching to structured JSON output made the agent reliable.
+
+**Traces make agents transparent.** Capturing every step of the ReAct loop — what the LLM saw, what it decided, what tools returned — turns a black box into something you can debug and trust.
+
+**Mock data must cover success cases.** I only mocked failure scenarios at first. The LLM assumed everything was broken and invented issues for healthy pods. Adding realistic healthy mock data fixed this.
+
+## Architecture
 
 ```
-├── 01-k8s-health-monitor/     # Project 1: K8s agent
+CLI / Web UI
+    |
+    v
+agent.py (ReAct loop)
+    |--- k8s_client.py ---> [kubectl] or [mock data]
+    |--- LLM decides: GET_PODS, GET_LOGS, DESCRIBE_POD
+    |--- alerts.py ---------> deterministic severity scores
+    |
+    v
+Combined output: LLM analysis + severity block + trace data
+```
+
+## Tech Stack
+
+| Component | Choice | Why |
+|-----------|--------|-----|
+| LLM client | litellm | Swap providers by changing one env var |
+| K8s data | subprocess + kubectl | Zero config, auto-detects cluster vs mock |
+| Agent loop | Custom ReAct | LLM decides which tools to call, iterates until done |
+| Server | FastAPI | Simple async server for the web UI |
+| Package mgmt | uv | Fast installs, deterministic lockfile |
+
+## Repo Structure
+
+```
+├── 01-k8s-health-monitor/
 │   ├── src/
-│   │   ├── cli.py             # CLI entry point
-│   │   ├── agent.py           # Agent logic (Model + Tools + Instructions)
-│   │   ├── alerts.py          # Deterministic pod severity scoring (LLM-independent)
-│   │   └── k8s_client.py      # Pod collector with mock fallback
-│   └── README.md              # Subproject docs + learning notes
-├── shared/
-│   └── llm.py                 # Shared LLM client (litellm)
-├── questions.md               # Persistent Q&A learning diary
-└── README.md                  # This file — build journal + index
+│   │   ├── agent.py           # ReAct agent loop + trace capture
+│   │   ├── k8s_client.py      # Pod collector with mock fallback
+│   │   ├── alerts.py          # Deterministic severity scoring
+│   │   ├── comparison.py      # Multi-model benchmarking
+│   │   ├── eval.py            # Evaluation framework
+│   │   └── cli.py             # CLI entry point
+│   ├── web/                   # Web UI (HTML/JS/CSS)
+│   └── server.py              # FastAPI server
+├── shared/llm.py              # LiteLLM wrapper
+├── Makefile
+└── pyproject.toml
+```
 
 ---
 
-## Next steps
+## Build Journal
 
-### Human-readable cluster health report
+<details>
+<summary><strong>Jul 13</strong> — Scaffold + first agent</summary>
 
-Yes — this is basically a richer version of the alert threshold block. Instead of just listing pods by severity, the agent could output a structured report with:
-- **Executive summary**: "7/10 pods healthy. Cluster is degraded."
-- **Top 3 issues** ranked by impact
-- **Timeline**: when each pod entered its current state
-- **Trend**: "3 warnings, up from 1 yesterday"
-- **Suggested actions**: priority-ordered fixes
+Built the project structure, implemented `k8s_client.py` (pod data collector with mock fallback), `agent.py` (one-shot LLM call), `cli.py` (Typer CLI), and `shared/llm.py` (litellm wrapper). Learned the Model-Tools-Instructions pattern from OpenAI's agent design guide.
 
-This is already partially done: the LLM produces the narrative, alerts produce the deterministic score. The next step is merging them into a single formatted report (Markdown or plaintext) that could be saved to a file or emailed.
+</details>
 
-### Publishing to a website
+<details>
+<summary><strong>Jul 14</strong> — ReAct loop + scenarios</summary>
 
-Also possible. Options from simplest to most sophisticated:
+Replaced the one-shot LLM call with a ReAct loop — the agent now iterates, calling `GET_LOGS` and `DESCRIBE_POD` on its own until it has enough evidence. Added 5 solo error scenarios and a composite mode that randomly mixes healthy + unhealthy pods.
 
-1. **Static HTML export** — `--report report.html` flag on the CLI that wraps the markdown output in a minimal HTML template. Zero infra, just a file on disk. Could serve via `python -m http.server` or GitHub Pages.
+</details>
 
-2. **FastAPI dashboard** — a lightweight web server (`pip install fastapi uvicorn`) that runs the analysis on each request and renders the result. Useful for on-demand checks.
+<details>
+<summary><strong>Jul 14</strong> — Tooling + alert thresholds</summary>
 
-3. **Scheduled updates** — use a cron job or GitHub Actions workflow to run the agent every N minutes and publish the report to a static site (GitHub Pages, S3, Netlify). The most "set and forget" option.
+Switched to uv for package management, added pre-commit hooks (ruff + conventional commits). Built `alerts.py` — deterministic severity scoring independent of the LLM. Wired it into the agent as a "belt and suspenders" safety net.
 
-4. **An actual dashboard** — embed the alert severity counts into a real dashboard (Grafana, Datadog, etc.) via their APIs. Overkill for this project but would be the production-grade solution.
+</details>
 
-The static export + GitHub Actions route is probably the sweet spot: minimal code, zero hosting cost, and the report gets version-controlled alongside the code.
-```
+<details>
+<summary><strong>Jul 14</strong> — Web UI</summary>
+
+Built a FastAPI server with a 3-tab web interface: Projects (docs), Live Demo (interactive analysis with charts), and Model Comparison (placeholder). Fixed several hallucination bugs — the LLM kept inventing pod names that didn't exist.
+
+</details>
+
+<details>
+<summary><strong>Jul 15</strong> — Structured output + trace capture</summary>
+
+Replaced fragile regex tool parsing with structured JSON output. Every ReAct iteration is now captured as a `TraceStep` — what the LLM saw, what it decided, what the tool returned, latency, tokens. The agent went from occasionally failing silently to reliably parsing every tool call.
+
+</details>
+
+<details>
+<summary><strong>Jul 15</strong> — Model comparison + evaluation</summary>
+
+Built a comparison engine that runs the same scenario across Gemini, GPT-4o Mini, Claude, and Ollama models in parallel. Built an evaluation framework with 6 ground-truth test cases that scores severity accuracy, root cause recall, and hallucination rate.
+
+</details>
+
+<details>
+<summary><strong>Jul 15</strong> — Chat follow-up + debug view</summary>
+
+Added interactive chat — after the initial analysis, users can ask follow-up questions like "How do I fix this?" The agent maintains context and can investigate further. Added an expandable Agent Trace panel showing every step of the reasoning process.
+
+</details>

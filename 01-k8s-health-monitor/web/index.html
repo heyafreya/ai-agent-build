@@ -9,62 +9,62 @@
 <body>
 <header>
 <h1>K8s Health Monitor</h1>
-<p class="sub">An AI agent that monitors Kubernetes clusters</p>
+<p class="sub">BKAgent Build Competition Entry | An AI agent that monitors Kubernetes clusters and explains what's wrong</p>
 </header>
 <div class="toc">
   <button class="tab-btn active" data-tab="projects">Projects</button>
   <button class="tab-btn" data-tab="live">Live Demo</button>
   <button class="tab-btn" data-tab="comparison">Model Comparison</button>
+  <button class="tab-btn" data-tab="eval">Evaluation</button>
 </div>
 <main>
   <!-- TAB 1: PROJECT SUMMARY -->
   <section id="projects" class="tab-content active">
     <h2>Project Summary</h2>
-    <div class="toc-bar">
-      <span><a href="#why">Why</a></span>
-      <span><a href="#arch">Architecture</a></span>
-      <span><a href="#components">Components</a></span>
-      <span><a href="#threshold">Alert Threshold</a></span>
-      <span><a href="#learnings">Learnings</a></span>
-      <span><a href="#usage">Usage</a></span>
-    </div>
     <div class="content-card">
-      <h3 id="why">Why</h3>
-      <p>K8s dashboards require manual inspection. This project delivers an automated plain-English health summary via an LLM, with a deterministic severity score underneath that never lies.</p>
-      <h3 id="arch">Architecture</h3>
-      <p>Agent runs either from CLI or via web server. The ReAct loop uses a Language Model to decide which tools to call: <code>GET_POD</code> s. return a pod table, <code>GET_LOGS</code> retrieves recent entries, and <code>DESCRIBE_POD</code> returns details. Tools are executed by a Python controller.</p>
+      <h3>Welcome</h3>
+      <p>This page hosts my entry for the <strong>Boston Kubernetes Meetup AI Agent Build Competition</strong> — a skills-building challenge where the goal is to practice a new skill, document what you learned, and publish it so others can learn too.</p>
+      <p>I hadn't built an agent before and don't have extensive Kubernetes experience. This project let me learn both at the same time: an AI agent that monitors a Kubernetes cluster and explains what's wrong in plain English.</p>
+
+      <h3>How it works</h3>
+      <p>The agent uses a <strong>ReAct loop</strong> — the LLM decides which tools to call, investigates failures, and iterates until it has enough evidence to explain what's wrong. A deterministic severity scorer runs alongside as a safety net.</p>
       <pre>
-CLI → agent.py (ReAct loop) → tools: get_pods, get_logs, describe
-                            → (in parallel) alerts.py (deterministic scores)
-                            → combined output</pre>
-      <h3 id="components">Components</h3>
+User request -> agent.py (ReAct loop) -> tools: get_pods, get_logs, describe
+                                    -> (parallel) alerts.py (hard rules)
+                                    -> combined output + trace data</pre>
+
+      <h3>Tools the agent can call</h3>
+      <table>
+        <tr><th>Tool</th><th>What it does</th></tr>
+        <tr><td>GET_PODS</td><td>List all pods with status, restarts, readiness</td></tr>
+        <tr><td>GET_LOGS</td><td>Retrieve recent log lines from a pod</td></tr>
+        <tr><td>DESCRIBE_POD</td><td>Get detailed events and conditions</td></tr>
+      </table>
+
+      <h3>What I learned</h3>
+      <p><strong>LLMs fabricate data without guardrails.</strong> The model invents pod names that don't exist unless you give it an explicit list. Adding <code>EXISTING PODS</code> to the prompt fixed this.</p>
+      <p><strong>Deterministic scoring is a safety net.</strong> LLMs aren't deterministic — the same input can produce different outputs. Pure-function severity rules (<code>alerts.py</code>) run alongside the LLM so the severity block is always correct.</p>
+      <p><strong>Regex parsing is fragile.</strong> The original agent parsed tool calls with regex. Any markdown formatting broke it. Structured JSON output made it reliable.</p>
+      <p><strong>Traces make agents transparent.</strong> Capturing every step of the ReAct loop turns a black box into something auditable. Click "Agent Trace" after running an analysis to see it.</p>
+
+      <h3>Key files</h3>
       <table>
         <tr><th>File</th><th>Role</th></tr>
-        <tr><td>cli.py</td><td>CLI entry point (Typer)</td></tr>
-        <tr><td>agent.py</td><td>Agent logic with ReAct loop</td></tr>
-        <tr><td>alerts.py</td><td>Severity scoring independent of LLM</td></tr>
-        <tr><td>k8s_client.py</td><td>Pod collector with mock fallback</td></tr>
-        <tr><td>server.py</td><td>FastAPI server for web</td></tr>
-        <tr><td>shared/llm.py</td><td>LiteLLM wrapper for 100+ providers</td></tr>
+        <tr><td>agent.py</td><td>ReAct agent loop + trace capture + chat follow-up</td></tr>
+        <tr><td>k8s_client.py</td><td>Pod data collection with mock fallback</td></tr>
+        <tr><td>alerts.py</td><td>Deterministic severity scoring (LLM-independent)</td></tr>
+        <tr><td>comparison.py</td><td>Benchmark same scenario across multiple LLMs</td></tr>
+        <tr><td>eval.py</td><td>Ground-truth evaluation framework</td></tr>
+        <tr><td>server.py</td><td>FastAPI server powering the web UI</td></tr>
       </table>
-      <h3 id="threshold">Alert Threshold</h3>
-      <p>Uses pure functions solely based on PodInfo: status names (CrashLoop+ImagePull → Critical, Pending → Warning), restart counts (>=5 Critical, >=3 Warning), and ready container ratios (0 ready → Critical, partial → Warning). Output severity scores are aggregated for reporting.</p>
-      <h3 id="learnings">Learnings &amp; Challenges</h3>
-      <p><strong>LLMs fabricate data without guardrails.</strong> Without an explicit pod list in the system prompt, the model invents names like <code>frontend-abc123</code> that don't exist. Adding <code>EXISTING PODS</code> to the prompt fixed this.</p>
-      <p><strong>Random data needs caching.</strong> <code>random.sample()</code> in the composite scenario generated a different pod set on every call. The LLM would describe pods from one call that vanished in the next. A cache dict ensures consistency across <code>/health</code>, <code>/pods</code>, and <code>/analyze</code>.</p>
-      <p><strong>Focus mode needs filtering at every layer.</strong> Selecting a pod isn't just an API parameter — charts, tables, and LLM context all need to respect the focus. The severity chart initially showed all 6 pods even when one was selected.</p>
-      <p><strong>Mock data must cover success cases too.</strong> <code>describe_pod()</code> only had data for bad pods. Healthy pods returned empty descriptions, so the LLM invented CrashLoopBackOff. Added detailed mock output for all healthy pods.</p>
-      <p><strong>Regex can't parse LLM markdown.</strong> The model outputs <code>##</code>, <code>###</code>, <code>- **bold**:</code> — chained regex replacements broke on nested structures. Switched to <code>marked.js</code>.</p>
-      <p><strong>JS regex order matters.</strong> Replacing <code>##</code> before <code>###</code> turned <code>### Issues Found</code> into <code>##Issues Found</code>. Reversed the order.</p>
-      <h3 id="usage">Usage</h3>
-      <ul>
-        <li><code>uv run python -m 01-k8s-health-monitor.src.cli</code> — default run</li>
-        <li><code>uv run python -m 01-k8s-health-monitor.src.cli -s solo-oom</code> — specific scenario</li>
-        <li><code>make serve</code> — web UI on port 8080</li>
-      </ul>
-      <p class="updated">Documentation updated: 2026-07-15</p>
+
+      <h3>Try it</h3>
+      <p><code>make run</code> for CLI, <code>make serve</code> for the web UI (port 8080). No cluster needed — mock data is built in.</p>
+      <p class="updated">Built for the BKAgent Build Competition | July 2026</p>
     </div>
   </section>
+
+  <!-- TAB 2: LIVE DEMO -->
   <section id="live" class="tab-content">
     <h2>Live Demo</h2>
     <div class="search-bar">
@@ -83,13 +83,58 @@ CLI → agent.py (ReAct loop) → tools: get_pods, get_logs, describe
       <button id="analyze-btn" onclick="run_analysis()">Analyze</button>
     </div>
     <div id="output">Click Analyze to run the LLM agent</div>
+
+    <!-- Agent Trace (appears after analysis) -->
+    <div id="trace-section" class="trace-section" style="display:none">
+      <div class="trace-header" onclick="toggleTrace()">
+        <span class="trace-toggle" id="trace-toggle-icon">&#9654;</span>
+        <span>Agent Trace</span>
+        <span class="trace-meta" id="trace-meta"></span>
+      </div>
+      <div id="trace-body" class="trace-body" style="display:none"></div>
+    </div>
+
+    <!-- Chat follow-up (appears after analysis) -->
+    <div id="chat-section" class="chat-section" style="display:none">
+      <div class="chat-header">Ask a follow-up question</div>
+      <div id="chat-messages" class="chat-messages"></div>
+      <div class="chat-input-row">
+        <input id="chat-input" type="text" placeholder="e.g. Why is payment-processor crashing? How do I fix it?" onkeydown="if(event.key==='Enter')sendChat()" />
+        <button onclick="sendChat()">Send</button>
+      </div>
+    </div>
   </section>
+
+  <!-- TAB 3: MODEL COMPARISON -->
   <section id="comparison" class="tab-content">
     <h2>Model Comparison</h2>
-    <div class="draft-card">
-      <p class="coming-soon">Coming Soon</p>
-      <p>This area will compare LLM performance across providers: latency, accuracy, token cost.</p>
+    <p class="tab-desc">Run the same scenario across multiple LLM providers and compare accuracy, latency, and cost side-by-side.</p>
+    <div class="search-bar">
+      <select id="compare-scenario">
+        <option value="composite">Composite</option>
+        <option value="healthy">All healthy</option>
+        <option value="solo-crashloop">solo CrashLoop</option>
+        <option value="solo-error">solo error</option>
+        <option value="solo-oom">solo OOM</option>
+        <option value="solo-imagepull">solo ImagePull</option>
+        <option value="solo-pending">solo Pending</option>
+      </select>
+      <button id="compare-btn" onclick="runComparison()">Compare Models</button>
     </div>
+    <div id="compare-output">Select a scenario and click Compare Models</div>
+  </section>
+
+  <!-- TAB 4: EVALUATION -->
+  <section id="eval" class="tab-content">
+    <h2>Evaluation</h2>
+    <p class="tab-desc">Run the agent against ground-truth scenarios to measure severity accuracy, root cause recall, and hallucination rate.</p>
+    <div class="search-bar">
+      <select id="eval-model">
+        <option value="">Default model</option>
+      </select>
+      <button id="eval-btn" onclick="runEval()">Run Evaluation</button>
+    </div>
+    <div id="eval-output">Click Run Evaluation to score the agent</div>
   </section>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
